@@ -9,11 +9,11 @@ data "azurerm_key_vault_secret" "ssh_public_key" {
 }
 
 data "azurerm_key_vault_secret" "kafka_poc_spn_id" {
-    name         = "kafka-poc-spn-id"
+    name         = "<sp_id_name>"
     key_vault_id = data.azurerm_key_vault.terraform_vault.id
 }
 
 data "azurerm_key_vault_secret" "kafka_poc_spn_secret" {
-    name         = "kafka-poc-spn-secret"
+    name         = "<sp_password_name>"
     key_vault_id = data.azurerm_key_vault.terraform_vault.id
 }
