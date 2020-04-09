@@ -1,0 +1,43 @@
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  namespace: istio-system
+spec:
+  values:
+    gateways:
+      istio-egressgateway:
+        enabled: false # a gateway de saída, permite controlar o tráfego de saída (p fora do cluster ou p internet)
+                      # e até afunilar o tráfego por determinados nós (ie. só alguns nós podem falar com a internet)
+      istio-ingressgateway:
+        type: LoadBalancer
+        enabled: false # gateway de entrada diretamente na mesh, funciona igual ao ingress por nginx
+    global:
+      proxy:
+        concurrency: 0 # o istio-proxy por default só usa 2 cores
+        logLevel: info # aumentar o nível de log
+        accessLogFile: /dev/stdout # logar para a consola
+    kiali: # configurações específicas da UI do kiali
+      contextPath: / 
+      dashboard:
+        auth:
+          strategy: anonymous # pode ser LDAP mas tem de ser configurado à posteriori
+        #grafanaURL: https://grafana.c3d.nos.pt # adapt this
+        #grafanaInClusterURL: http://grafana.nosi.qc:3000 # adapt this too
+        #jaegerURL: https://jaeger.qc.nos.pt/jaeger # and this
+      prometheusAddr: http://prometheus-prometheus.monitoring:9090
+      ingress:
+        enabled: true
+        hosts: ["kiali.ursos.pt"]
+      enabled: true
+    pilot: # by default o istio só guarda 1% dos requests, aqui peço 100%
+      traceSampling: 100
+    prometheus: # já temos um prometheus, n precisamos de outro
+      enabled: false
+    tracing: # ativar o tracing dos requests
+      enabled: true  
+      jaeger:
+        spanStorageType: memory
+        persist: true
+        storageClassName: azurefile
+    grafana: # também já temos um grafana
+      enabled: false

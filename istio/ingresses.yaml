@@ -1,0 +1,39 @@
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  name: kiali-ingress
+  namespace: istio-system
+spec:
+  rules:
+  - host: kiali.ursos.pt
+    http:
+      paths:
+      - backend:
+          serviceName: kiali
+          servicePort: 20001
+  tls:
+  - hosts:
+    - kiali.ursos.pt
+    secretName: kiali-tls-secret
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt
+  name: jaeger-ingress
+  namespace: istio-system
+spec:
+  rules:
+  - host: jaeger.ursos.pt
+    http:
+      paths:
+      - backend:
+          serviceName: jaeger-query
+          servicePort: 16686
+  tls:
+  - hosts:
+    - jaeger.ursos.pt
+    secretName: jaeger-tls-secret

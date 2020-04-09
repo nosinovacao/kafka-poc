@@ -1,0 +1,21 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: cruisecontrol-servicemonitor
+  labels:
+    prometheus: prometheus-prometheus
+    app: kafka
+    kafka_cr: kafka-poc
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: cruisecontrol
+  namespaceSelector:
+    matchNames:
+    - kafka
+  endpoints:
+  - interval: 10s
+    port: metrics
+    path: /metrics
+    honorLabels: true

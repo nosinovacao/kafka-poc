@@ -1,0 +1,347 @@
+/*
+Copyright 2019 Banzai Cloud.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package sidecarinjector
+
+import (
+	"fmt"
+	"strings"
+
+	appsv1 "k8s.io/api/apps/v1"
+	apiv1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/banzaicloud/istio-operator/pkg/apis/istio/v1beta1"
+	"github.com/banzaicloud/istio-operator/pkg/k8sutil"
+	"github.com/banzaicloud/istio-operator/pkg/resources/base"
+	"github.com/banzaicloud/istio-operator/pkg/resources/templates"
+	"github.com/banzaicloud/istio-operator/pkg/util"
+)
+
+func (r *Reconciler) containerArgs() []string {
+	containerArgs := []string{
+		"--caCertFile=/etc/istio/certs/root-cert.pem",
+		"--tlsCertFile=/etc/istio/certs/cert-chain.pem",
+		"--tlsKeyFile=/etc/istio/certs/key.pem",
+		"--injectConfig=/etc/istio/inject/config",
+		"--meshConfig=/etc/istio/config/mesh",
+		"--healthCheckInterval=2s",
+		"--healthCheckFile=/tmp/health",
+		"--reconcileWebhookConfig=true",
+	}
+
+	if len(r.Config.Spec.SidecarInjector.AdditionalContainerArgs) != 0 {
+		containerArgs = append(containerArgs, r.Config.Spec.SidecarInjector.AdditionalContainerArgs...)
+	}
+
+	return containerArgs
+}
+
+func (r *Reconciler) containerEnvs() []apiv1.EnvVar {
+	envs := make([]apiv1.EnvVar, 0)
+
+	envs = k8sutil.MergeEnvVars(envs, r.Config.Spec.SidecarInjector.AdditionalEnvVars)
+
+	return envs
+}
+
+func (r *Reconciler) deployment() runtime.Object {
+	deployment := &appsv1.Deployment{
+		ObjectMeta: templates.ObjectMeta(deploymentName, util.MergeStringMaps(sidecarInjectorLabels, labelSelector), r.Config),
+		Spec: appsv1.DeploymentSpec{
+			Replicas: r.Config.Spec.SidecarInjector.ReplicaCount,
+			Strategy: templates.DefaultRollingUpdateStrategy(),
+			Selector: &metav1.LabelSelector{
+				MatchLabels: util.MergeStringMaps(sidecarInjectorLabels, labelSelector),
+			},
+			Template: apiv1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      util.MergeStringMaps(sidecarInjectorLabels, labelSelector),
+					Annotations: util.MergeStringMaps(templates.DefaultDeployAnnotations(), r.Config.Spec.SidecarInjector.PodAnnotations),
+				},
+				Spec: apiv1.PodSpec{
+					ServiceAccountName: serviceAccountName,
+					Containers: []apiv1.Container{
+						{
+							Name:            "sidecar-injector-webhook",
+							Image:           util.PointerToString(r.Config.Spec.SidecarInjector.Image),
+							ImagePullPolicy: r.Config.Spec.ImagePullPolicy,
+							Args:            r.containerArgs(),
+							SecurityContext: &apiv1.SecurityContext{
+								RunAsUser:    util.Int64Pointer(1337),
+								RunAsGroup:   util.Int64Pointer(1337),
+								RunAsNonRoot: util.BoolPointer(true),
+							},
+							VolumeMounts: []apiv1.VolumeMount{
+								{
+									Name:      "config-volume",
+									MountPath: "/etc/istio/config",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "certs",
+									MountPath: "/etc/istio/certs",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "inject-config",
+									MountPath: "/etc/istio/inject",
+									ReadOnly:  true,
+								},
+							},
+							ReadinessProbe: siProbe(),
+							LivenessProbe:  siProbe(),
+							Resources: templates.GetResourcesRequirementsOrDefault(
+								r.Config.Spec.SidecarInjector.Resources,
+								r.Config.Spec.DefaultResources,
+							),
+							Env:                      r.containerEnvs(),
+							TerminationMessagePath:   apiv1.TerminationMessagePathDefault,
+							TerminationMessagePolicy: apiv1.TerminationMessageReadFile,
+						},
+					},
+					SecurityContext: &apiv1.PodSecurityContext{
+						FSGroup: util.Int64Pointer(1337),
+					},
+					Volumes:           r.volumes(),
+					Affinity:          r.Config.Spec.SidecarInjector.Affinity,
+					NodeSelector:      r.Config.Spec.SidecarInjector.NodeSelector,
+					Tolerations:       r.Config.Spec.SidecarInjector.Tolerations,
+					PriorityClassName: r.Config.Spec.PriorityClassName,
+				},
+			},
+		},
+	}
+
+	if util.PointerToBool(r.Config.Spec.Istiod.Enabled) && util.PointerToBool(r.Config.Spec.Istiod.MultiClusterSupport) {
+		deployment.Spec.Template.Spec.InitContainers = []apiv1.Container{
+			r.certFetcherContainer(),
+		}
+	}
+
+	return deployment
+}
+
+func siProbe() *apiv1.Probe {
+	return &apiv1.Probe{
+		Handler: apiv1.Handler{
+			Exec: &apiv1.ExecAction{
+				Command: []string{
+					"/usr/local/bin/sidecar-injector",
+					"probe",
+					"--probe-path=/tmp/health",
+					"--interval=4s",
+				},
+			},
+		},
+		InitialDelaySeconds: 4,
+		PeriodSeconds:       4,
+		FailureThreshold:    3,
+		TimeoutSeconds:      1,
+		SuccessThreshold:    1,
+	}
+}
+
+func (r *Reconciler) volumes() []apiv1.Volume {
+	volumes := []apiv1.Volume{
+		{
+			Name: "config-volume",
+			VolumeSource: apiv1.VolumeSource{
+				ConfigMap: &apiv1.ConfigMapVolumeSource{
+					LocalObjectReference: apiv1.LocalObjectReference{
+						Name: base.IstioConfigMapName,
+					},
+					DefaultMode: util.IntPointer(420),
+				},
+			},
+		},
+		{
+			Name: "inject-config",
+			VolumeSource: apiv1.VolumeSource{
+				ConfigMap: &apiv1.ConfigMapVolumeSource{
+					LocalObjectReference: apiv1.LocalObjectReference{
+						Name: configMapNameInjector,
+					},
+					Items: []apiv1.KeyToPath{
+						{
+							Key:  "config",
+							Path: "config",
+						},
+						{
+							Key:  "values",
+							Path: "values",
+						},
+					},
+					DefaultMode: util.IntPointer(420),
+				},
+			},
+		},
+	}
+
+	if util.PointerToBool(r.Config.Spec.Istiod.Enabled) && util.PointerToBool(r.Config.Spec.Istiod.MultiClusterSupport) {
+		volumes = append(volumes, apiv1.Volume{
+			Name: "certs",
+			VolumeSource: apiv1.VolumeSource{
+				EmptyDir: &apiv1.EmptyDirVolumeSource{
+					Medium: apiv1.StorageMediumMemory,
+				},
+			},
+		})
+	} else {
+		var secretPrefix string
+		if len(r.Config.Spec.Certificates) != 0 {
+			secretPrefix = "dns"
+		} else {
+			secretPrefix = "istio"
+		}
+		secretName := fmt.Sprintf("%s.%s", secretPrefix, serviceAccountName)
+		volumes = append(volumes, apiv1.Volume{
+			Name: "certs",
+			VolumeSource: apiv1.VolumeSource{
+				Secret: &apiv1.SecretVolumeSource{
+					SecretName:  secretName,
+					DefaultMode: util.IntPointer(420),
+				},
+			},
+		})
+	}
+
+	if util.PointerToBool(r.Config.Spec.Istiod.Enabled) && r.Config.Spec.Pilot.CertProvider == v1beta1.PilotCertProviderTypeIstiod {
+		volumes = append(volumes, apiv1.Volume{
+			Name: "istiod-ca-cert",
+			VolumeSource: apiv1.VolumeSource{
+				ConfigMap: &apiv1.ConfigMapVolumeSource{
+					LocalObjectReference: apiv1.LocalObjectReference{
+						Name: "istio-ca-root-cert",
+					},
+				},
+			},
+		})
+	}
+
+	if r.Config.Spec.JWTPolicy == v1beta1.JWTPolicyThirdPartyJWT {
+		volumes = append(volumes, apiv1.Volume{
+			Name: "istio-token",
+			VolumeSource: apiv1.VolumeSource{
+				Projected: &apiv1.ProjectedVolumeSource{
+					Sources: []apiv1.VolumeProjection{
+						{
+							ServiceAccountToken: &apiv1.ServiceAccountTokenProjection{
+								Audience:          r.Config.Spec.SDS.TokenAudience,
+								ExpirationSeconds: util.Int64Pointer(43200),
+								Path:              "istio-token",
+							},
+						},
+					},
+				},
+			},
+		})
+	}
+
+	return volumes
+}
+
+func (r *Reconciler) certFetcherContainer() apiv1.Container {
+	args := []string{
+		"proxy",
+		"sidecar",
+		"--serviceCluster",
+		"istio-si-cert-fetcher",
+		"--controlPlaneAuthPolicy",
+		templates.ControlPlaneAuthPolicy(util.PointerToBool(r.Config.Spec.Istiod.Enabled), r.Config.Spec.ControlPlaneSecurityEnabled),
+		"--domain",
+		r.Config.Namespace + ".svc." + r.Config.Spec.Proxy.ClusterDomain,
+		"--discoveryAddress", r.Config.GetDiscoveryAddress(),
+		"--trust-domain",
+		r.Config.Spec.TrustDomain,
+	}
+
+	if util.PointerToBool(r.Config.Spec.Proxy.EnvoyAccessLogService.Enabled) {
+		args = append(args, []string{
+			"--envoyAccessLogService",
+			r.Config.Spec.Proxy.EnvoyAccessLogService.GetDataJSON(),
+		}...)
+	}
+
+	return apiv1.Container{
+		Name:                     "cert-fetcher",
+		Image:                    r.Config.Spec.Proxy.Image,
+		ImagePullPolicy:          r.Config.Spec.ImagePullPolicy,
+		Args:                     args,
+		Env:                      append(templates.IstioProxyEnv(r.Config), r.cfEnvVars()...),
+		VolumeMounts:             r.cfVolumeMounts(),
+		TerminationMessagePath:   apiv1.TerminationMessagePathDefault,
+		TerminationMessagePolicy: apiv1.TerminationMessageReadFile,
+	}
+}
+
+func (r *Reconciler) cfEnvVars() []apiv1.EnvVar {
+	serviceHostnames := []string{
+		fmt.Sprintf("%s.%s", serviceName, r.Config.Namespace),
+		fmt.Sprintf("%s.%s.svc", serviceName, r.Config.Namespace),
+		fmt.Sprintf("%s.%s.svc.%s", serviceName, r.Config.Namespace, r.Config.Spec.Proxy.ClusterDomain),
+	}
+	envVars := []apiv1.EnvVar{
+		{
+			Name:  "CERT_CUSTOM_DNS_NAMES",
+			Value: strings.Join(serviceHostnames, ","),
+		},
+		{
+			Name:  "SECRET_TTL",
+			Value: "8640h",
+		},
+		{
+			Name:  "OUTPUT_CERTS",
+			Value: "/etc/certs",
+		},
+		{
+			Name:  "CERT_GENERATION_ONLY",
+			Value: "true",
+		},
+	}
+
+	envVars = append(envVars, apiv1.EnvVar{
+		Name:  "CA_ADDR",
+		Value: r.Config.GetCAAddress(),
+	})
+
+	return envVars
+}
+
+func (r *Reconciler) cfVolumeMounts() []apiv1.VolumeMount {
+	vms := []apiv1.VolumeMount{}
+
+	vms = append(vms, apiv1.VolumeMount{
+		Name:      "certs",
+		MountPath: "/etc/certs",
+	})
+
+	if r.Config.Spec.JWTPolicy == v1beta1.JWTPolicyThirdPartyJWT {
+		vms = append(vms, apiv1.VolumeMount{
+			Name:      "istio-token",
+			MountPath: "/var/run/secrets/tokens",
+			ReadOnly:  true,
+		})
+	}
+
+	vms = append(vms, apiv1.VolumeMount{
+		Name:      "istiod-ca-cert",
+		MountPath: "/var/run/secrets/istio",
+	})
+
+	return vms
+}
