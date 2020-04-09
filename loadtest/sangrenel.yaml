@@ -1,0 +1,94 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: loadtest
+---
+apiVersion: v1
+data:
+  .dockerconfigjson: ***REMOVED***
+kind: Secret
+metadata:
+  name: docker-nosinovacao
+  namespace: loadtest
+type: kubernetes.io/dockerconfigjson
+---
+# apiVersion: apps/v1
+# kind: Deployment
+# metadata:
+#   name: sangrenel
+#   namespace: loadtest
+#   labels:
+#     app: sangrenel
+#     version: dev
+# spec:
+#   strategy:
+#     type: Recreate
+#   selector:
+#     matchLabels:
+#       app: sangrenel
+#       version: dev
+#   template:
+#     metadata:
+#       labels:
+#         app: sangrenel
+#         version: dev
+#     spec:
+#       imagePullSecrets:
+#       - name: docker-nosinovacao
+#       containers:
+#       - name: sangrenel
+#         image: docker.nosinovacao.pt/sangrenel:dev
+#         args:
+#         - -brokers
+#         #- kafka-0.kafka:29093,kafka-1.kafka:29093,kafka-2.kafka:29093
+#         - kafka-poc-all-broker.kafka:29092
+#         #- kafka-poc-0.kafka.svc.cluster.local:29092,
+#         - -compression
+#         - none
+#         - workers
+#         - "8"
+#         - -writers-per-worker
+#         - "8"
+#       #restartPolicy: OnFailure
+---
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: sangrenel
+    namespace: loadtest
+    labels:
+      app: sangrenel
+      version: dev
+  spec:
+    strategy:
+      type: RollingUpdate
+    selector:
+      matchLabels:
+        app: sangrenel
+        version: dev
+    template:
+      metadata:
+        labels:
+          app: sangrenel
+          version: dev
+      spec:
+        containers:
+        - name: sangrenel
+          image: pebbletech/sangrenel
+          resources:
+            requests:
+              cpu: "3260m"
+              memory: "5090788Ki"
+            limits:
+              cpu: "3260m"
+              memory: "5090788Ki"
+          args:
+          - -brokers
+          #- kafka-0.kafka:29093,kafka-1.kafka:29093,kafka-2.kafka:29093
+          - kafka-poc-all-broker.kafka:29092
+          #- kafka-poc-0.kafka.svc.cluster.local:29092,
+          - -compression
+          - none
+          - -clients=8
+          - -producers=8
+        #restartPolicy: OnFailure

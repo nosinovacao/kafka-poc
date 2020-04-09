@@ -1,0 +1,16 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: kafka-poc-all-broker
+  namespace: kafka
+spec:
+  hosts:
+  - kafka-poc-all-broker.kafka.svc.cluster.local
+  tcp:
+  - match:
+    - port: 29092
+    route:
+    - destination:
+        host: kafka-poc-all-broker.kafka.svc.cluster.local
+        port:
+          number: 29092

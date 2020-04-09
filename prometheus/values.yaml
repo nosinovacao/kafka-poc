@@ -1,0 +1,47 @@
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    image:
+      repository: quay.io/prometheus/alertmanager
+      tag: v0.20.0
+    storage: 
+      volumeClaimTemplate:
+        spec:
+          storageClassName: default
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 50Gi
+
+grafana:
+    enabled: false
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    image:
+      repository: quay.io/prometheus/prometheus
+      tag: v2.15.2
+    alertingEndpoints:
+    - apiVersion: v2
+      name: prometheus-alertmanager
+      namespace: monitoring
+      pathPrefix: /
+      port: web
+    - apiVersion: v2
+      name: kafka-operator-alertmanager
+      namespace: kafka
+      port: alerts
+    enableAdminAPI: true
+    walCompression: true
+    retention: 45d  
+    storageSpec: 
+      volumeClaimTemplate:
+        spec:
+          storageClassName: default
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 200Gi
+
+nameOverride: "prometheus"

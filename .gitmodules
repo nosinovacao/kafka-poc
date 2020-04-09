@@ -1,0 +1,3 @@
+[submodule "istio/istio-operator"]
+	path = istio/istio-operator
+	url = https://github.com/banzaicloud/istio-operator.git
