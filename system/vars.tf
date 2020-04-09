@@ -8,7 +8,7 @@ variable "keyvault_name" {
 
 variable "ssh_key_name" {
   type    = string
-  default = "kafka-poc-pk"
+  default = "<private_key_name>"
 }
 
 variable "admin_username" {
